@@ -31,8 +31,7 @@ targets <- read_csv(url, show_col_types = FALSE)
 # this is water temperature from the EXO sonde at FCR at 1.6 m depth
 temp <- targets |>
   filter(variable == "Temp_C_mean" & site_id == "fcre" & depth_m == 1.6) %>%
-  filter(!year(datetime) == 2018) %>% # filter out 2018 because no data until August
-  tidyr::fill(observation, .direction = "downup")
+  filter(!year(datetime) == 2018) # filter out 2018 because no data until August
 
 # plot data
 ggplot(data = temp, aes(x = datetime, y = observation))+
@@ -174,6 +173,14 @@ ggplot(data = fc_plot_data)+
   xlab("")
 ```
 
+### Fill any NAs in the forecast
+```{r}
+fc_final <- fc_final %>%
+  group_by(parameter) %>%
+  tidyr::fill(prediction, .direction = "downup") %>%
+  ungroup()
+```
+
 ### Submit forecast to VERA!
 ```{r}
 theme <- 'daily'
@@ -182,7 +189,7 @@ forecast_file <- paste(theme, date, "GPEDM", sep = '-')
 forecast_file1 <- c(paste0(forecast_file, ".csv"))
 write.csv(fc_final, forecast_file1, row.names = FALSE)
 vera4castHelpers::forecast_output_validator(forecast_file1)
-vera4castHelpers::submit(forecast_file1, s3_region = "submit", s3_endpoint = "ltreb-reservoirs.org", first_submission = TRUE)
+vera4castHelpers::submit(forecast_file1, s3_region = "submit", s3_endpoint = "ltreb-reservoirs.org", first_submission = FALSE)
 
 ```
 
