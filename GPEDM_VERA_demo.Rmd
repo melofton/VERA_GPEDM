@@ -30,17 +30,17 @@ targets <- read_csv(url, show_col_types = FALSE)
 # isolate water temperature data
 # this is water temperature from the EXO sonde at FCR at 1.6 m depth
 temp <- targets |>
-  filter(variable == "Temp_C_mean" & site_id == "fcre" & depth_m == 1.6) %>%
-  filter(!year(datetime) == 2018) %>% # filter out 2018 because no data until August
+  filter(variable == "Temp_C_mean" & site_id == "fcre" & depth_m == 1.6) |>
+  filter(!year(datetime) == 2018) |> # filter out 2018 because no data until August
   tidyr::fill(observation, .direction = "downup")
 
 # plot data
-ggplot(data = temp, aes(x = datetime, y = observation))+
-  geom_line()+
+ggplot(data = temp, aes(x = datetime, y = observation)) +
+  geom_line() +
   theme_bw()
 ```
 
-### Visualize autocorrelation lags in target variable
+### Visualize autocorrelation lags in the target variable
 The purpose of this is to inform the choice of tau. **Tau** is the number of timesteps into the past that we are using for prediction. Considerations in choosing tau include:    
 
 1. **Forecasting needs** - over what time horizons are we trying to forecast? For example, if we have 10-minute data, probably a tau of 1 is not very useful because it would just be using data 10 minutes ago to predict data 10 minutes into the future. However, if we have daily data and we want a forecast for tomorrow, using a tau of 60 days might not be very useful because the model would only be using data that occurred two months ago to make a forecast of tomorrow (looking at more recent data would be beneficial).    
@@ -51,15 +51,15 @@ The purpose of this is to inform the choice of tau. **Tau** is the number of tim
 acf(temp$observation, na.action = na.pass, lag.max = 100)
 ```
 
-Here, we observe that ACF reaches a minimum at ~90 days, so that's potentially a good lag to use. However, we also want to make day-ahead forecasts (so definitely want to use a 1-day lag to make this easy given the way the GPEDM package functions work) and there might be useful information at shorter lags than 90 days. So instead of just setting tau to 90, we will use expert opinion to manually select lags that we think will be good for prediction. Here, we use expert opinion to choose lags of 1, 30, and 90 days. Ninety days also corresponds to about the residence time of FCR, which is another reason in support of choosing this lag.
+Here, we observe that ACF reaches a minimum at ~90 days, so that's potentially a good lag to use. However, we also want to make day-ahead forecasts (so we definitely want to use a 1-day lag to make this easy given the way the GPEDM package functions work), and there might be useful information at shorter lags than 90 days. So, instead of just setting tau to 90, we will use expert opinion to manually select lags that we think will be good for prediction. Here, we use expert opinion to choose lags of 1, 30, and 90 days. Ninety days also corresponds to about the residence time of FCR, which is another reason in support of choosing this lag.
 
-ALTERNATIVELY, we could use the ACF to select tau (90 days) and then select E, an embedding number, that would tell the model how many 90 day lags to include. For example, a tau of 90 and an E of 2 would mean that the model would include a 90-day and 180-day lag. Typically, it is good practice to have `E*tau` = the dominant periodicity in the variable. For water temperature, this would be 1 year. So if we choose a tau of 90, we should choose an E of 4, giving `E*tau` of 360, or about a year. Conversely, if we chose a tau of 60, we would choose an E of 6.
+Alternatively, we could use the ACF to select tau (90 days) and then select E, an embedding number that would tell the model how many 90-day lags to include. For example, a tau of 90 and an E of 2 would mean that the model would include a 90-day and 180-day lag. Typically, it is good practice to have `E*tau` = the dominant periodicity in the variable. For water temperature, this would be 1 year. So if we choose a tau of 90, we should choose an E of 4, giving `E*tau` of 360, or about a year. Conversely, if we chose a tau of 60, we would choose an E of 6.
 
 ### Data wrangling to fit EDM and forecast
-First, we will extend the dataframe to include the next 1-35 days so we can supply that as `newdata` to the `fitGP` function below.
+First, we will extend the dataframe to include the next 1-35 days to supply that as `newdata` to the `fitGP` function below.
 ```{r}
-forecast_time_horizon = 35
-forecast_dates = seq.Date(from = as.Date(last(temp$datetime))+1, to = as.Date(last(temp$datetime))+forecast_time_horizon, by = "day")
+forecast_time_horizon <- 35
+forecast_dates <- seq.Date(from = as.Date(last(temp$datetime))+1, to = as.Date(last(temp$datetime))+forecast_time_horizon, by = "day")
 fc_df <- data.frame(project_id = "vera4cast",
                     site_id = "fcre",
                     datetime = forecast_dates,
@@ -73,7 +73,7 @@ mod_df <- bind_rows(temp, fc_df)
 Because we are manually choosing lags that are not evenly spaced, we will calculate all lags from 1-360 days and then tell the model which ones to use when fitting. We also add a Time column which we *think* is needed for the function to run properly, as we were getting errors without it.
 ```{r}
 #generate all lags
-HPlags=makelags(mod_df,"observation",E=360, tau=1, append=T) %>%
+HPlags <- makelags(mod_df,"observation",E=360, tau=1, append=T) |>
   add_column(Time = c(1:nrow(mod_df)))
 ```
 
@@ -83,8 +83,8 @@ Here, we split the data into training and forecasting sets. We will need to sele
 forecast_time_horizon = 35
 
 # split training and forecast sets
-HP_train=HPlags[1:(nrow(HPlags) - forecast_time_horizon),]
-HP_test=HPlags[(nrow(HPlags) - forecast_time_horizon + 1):nrow(HPlags),]
+past_data  <- HPlags[1:(nrow(HPlags) - forecast_time_horizon),]
+future_data  <- HPlags[(nrow(HPlags) - forecast_time_horizon + 1):nrow(HPlags),]
 ```
 
 ### Fit EDM model
@@ -92,17 +92,17 @@ HP_test=HPlags[(nrow(HPlags) - forecast_time_horizon + 1):nrow(HPlags),]
 Here we fit the EDM model with the following arguments:
 1. *data* is the dataframe used for model training
 2. *y* is the column name of the target variable as a character string
-3. *x* is the column names of the lags using in prediction as a vector of character strings
+3. *x* are the column names of the lags used in prediction as a vector of character strings
 4. *time* is the name of the timestep column (can this handle datetimes?)
 5. *newdata* is the dataframe of timesteps to be forecasted
 ```{r}
-mod <- fitGP(data = HP_train, 
+mod <- fitGP(data = past_data, 
           y = "observation",
           x = c("observation_1","observation_30","observation_90"),
           time = "Time")
 ```
 
-### Make empty forecast dataframe
+### Make an empty forecast dataframe
 ```{r}
 fc_final <- data.frame(project_id = "vera4cast",
                        model_id = "example_GPEDM",
@@ -114,8 +114,7 @@ fc_final <- data.frame(project_id = "vera4cast",
                        family = "normal",
                        parameter = rep(c("mu","sigma"), times = length(forecast_dates)),
                        variable = "Temp_C_mean",
-                       prediction = NA
-                       ) %>%
+                       prediction = NA) |> 
   slice(0)
 ```
 
@@ -125,18 +124,18 @@ fc_final <- data.frame(project_id = "vera4cast",
 `fitGP` can't handle the forecast dataframe without the lags pre-populated, so we will need to generate our predictions iteratively and fill the lags with model predictions as we go.
 ```{r}
 for(t in 1:nrow(HP_test)){
-  pred_list <- predict(mod, newdata = HP_test[t,])
+  pred_list <- predict(mod, newdata = future_data[t,])
   pred_df <- pred_list$outsampresults
   
-  if(t != nrow(HP_test)){
-  HP_test[t+1,"observation_1"] <- pred_df$predmean
+  if(t != nrow(future_data)){
+  future_data[t+1,"observation_1"] <- pred_df$predmean
   }
   
-  if(is.na(HP_test[t+1,"observation_30"]) & t != nrow(HP_test)){
-    lag_30 <- fc_final %>%
+  if(is.na(future_data[t+1,"observation_30"]) & t != nrow(future_data)){
+    lag_30 <- fc_final |>
       filter(datetime == forecast_dates[t-29] & parameter == "mu") %>%
       pull(prediction)
-    HP_test[t+1,"observation_30"] <- lag_30
+    future_data[t+1,"observation_30"] <- lag_30
   }
   
   fc_temp <- data.frame(project_id = "vera4cast",
@@ -159,18 +158,19 @@ for(t in 1:nrow(HP_test)){
 ### Plot forecast
 Just for funsies!
 ```{r}
-fc_plot_data <- fc_final %>%
-  pivot_wider(names_from = "parameter", values_from = "prediction") %>%
-  mutate(lower = mu - 2*sigma,
-         upper = mu + 2*sigma)
+fc_plot_data <- fc_final |>
+  pivot_wider(names_from = "parameter", values_from = "prediction") |>
+  mutate(lower = mu - 1.96*sigma,
+         upper = mu + 1.96*sigma)
+
 ggplot(data = fc_plot_data)+
   geom_ribbon(aes(x = datetime, ymin = lower, ymax = upper,
-                  fill = "water temperature"), alpha = 0.5)+
-  geom_line(aes(x = datetime, y = mu, col = "water temperature"))+
-  theme_bw()+
-  scale_color_manual(name = "variable", values = c("water temperature" = "blue"))+
-  scale_fill_manual(name = "variable", values = c("water temperature" = "blue"))+
-  ylab("°C")+
+                  fill = "water temperature"), alpha = 0.5) +
+  geom_line(aes(x = datetime, y = mu, col = "water temperature")) +
+  theme_bw() +
+  scale_color_manual(name = "variable", values = c("water temperature" = "blue")) +
+  scale_fill_manual(name = "variable", values = c("water temperature" = "blue")) +
+  ylab("°C") +
   xlab("")
 ```
 
@@ -179,10 +179,10 @@ ggplot(data = fc_plot_data)+
 theme <- 'daily'
 date <- Sys.Date()
 forecast_file <- paste(theme, date, "GPEDM", sep = '-')
-forecast_file1 <- c(paste0(forecast_file, ".csv"))
-write.csv(fc_final, forecast_file1, row.names = FALSE)
-vera4castHelpers::forecast_output_validator(forecast_file1)
-vera4castHelpers::submit(forecast_file1, s3_region = "submit", s3_endpoint = "ltreb-reservoirs.org", first_submission = TRUE)
+forecast_file_name <- c(paste0(forecast_file, ".csv"))
+write.csv(fc_final, forecast_file_name, row.names = FALSE)
+vera4castHelpers::forecast_output_validator(forecast_file_name)
+vera4castHelpers::submit(forecast_file_name, s3_region = "submit", s3_endpoint = "ltreb-reservoirs.org", first_submission = TRUE)
 
 ```
 
