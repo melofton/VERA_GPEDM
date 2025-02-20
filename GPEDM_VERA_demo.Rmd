@@ -12,6 +12,8 @@ knitr::opts_chunk$set(echo = TRUE)
 # install GPEDM package from GitHub
 # you will need to install devtools first if you do not have it
 devtools::install_github("tanyalrogers/GPEDM")
+devtools::install_github("LTREB-reservoirs/vera4castHelpers")
+if (!require("tidyverse")) install.packages("tidyverse")
 
 # load packages
 library(GPEDM)
