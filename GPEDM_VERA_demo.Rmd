@@ -155,6 +155,14 @@ for(t in 1:nrow(HP_test)){
 }
 ```
 
+### Fill any NAs in the forecast
+```{r}
+fc_final <- fc_final %>%
+  group_by(parameter) %>%
+  tidyr::fill(prediction, .direction = "downup") %>%
+  ungroup()
+```
+
 ### Plot forecast
 Just for funsies!
 ```{r}
@@ -171,14 +179,6 @@ ggplot(data = fc_plot_data)+
   scale_fill_manual(name = "variable", values = c("water temperature" = "blue"))+
   ylab("°C")+
   xlab("")
-```
-
-### Fill any NAs in the forecast
-```{r}
-fc_final <- fc_final %>%
-  group_by(parameter) %>%
-  tidyr::fill(prediction, .direction = "downup") %>%
-  ungroup()
 ```
 
 ### Submit forecast to VERA!
