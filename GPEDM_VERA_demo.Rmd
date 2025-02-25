@@ -7,18 +7,23 @@ output: html_document
 
 ### Install and load GPEDM and other packages
 ```{r setup, include=FALSE}
-knitr::opts_chunk$set(echo = TRUE)
+# install packages on CRAN
+if (!require("tidyverse")) install.packages("tidyverse")
+if (!require("devtools")) install.packages("devtools")
+if (!require("knitr")) install.packages("knitr")
 
-# install GPEDM package from GitHub
+# install GPEDM and vera4castHelpers packages from GitHub
 # you will need to install devtools first if you do not have it
 devtools::install_github("tanyalrogers/GPEDM")
 devtools::install_github("LTREB-reservoirs/vera4castHelpers")
-if (!require("tidyverse")) install.packages("tidyverse")
 
 # load packages
 library(GPEDM)
 library(tidyverse)
 library(vera4castHelpers)
+
+# set document options
+knitr::opts_chunk$set(echo = TRUE)
 ```
 
 ### Read in and visualize VERA forecast challenge data

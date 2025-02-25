@@ -1,0 +1,127 @@
+---
+title: "GPEDM demo for VERA forecast challenge"
+author: "Lofton, M.E., Thomas, R.Q., Munch, S.B."
+date: "2025-02-19"
+output: html_document
+---
+
+### Install and load GPEDM and other packages
+```{r setup, include=FALSE}
+# install packages on CRAN
+if (!require("tidyverse")) install.packages("tidyverse")
+if (!require("devtools")) install.packages("devtools")
+if (!require("knitr")) install.packages("knitr")
+
+# install GPEDM and vera4castHelpers packages from GitHub
+# you will need to install devtools first if you do not have it
+devtools::install_github("tanyalrogers/GPEDM")
+devtools::install_github("LTREB-reservoirs/vera4castHelpers")
+
+# load packages
+library(GPEDM)
+library(tidyverse)
+library(vera4castHelpers)
+
+# set document options
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+### Read in and visualize VERA forecast challenge data
+Right now we are only pulling thermocline depth as an example covariate to fit the EDM model. When we met during Steve's visit, we also discussed about examining water temperature at 1.6 m, shortwave radiation, windspeed, and also seasonality (sine, cosine) as potential drivers.
+
+```{r}
+# read in VERA forecast challenge data
+url <- "https://renc.osn.xsede.org/bio230121-bucket01/vera4cast/targets/project_id=vera4cast/duration=P1D/daily-insitu-targets.csv.gz"
+targets <- read_csv(url, show_col_types = FALSE)
+
+# isolate chlorophyll-a data and thermocline depth data
+# this is chlorophyll-a from the EXO sonde at FCR at 1.6 m depth
+# thermocline depth is calculated from the thermistor string in FCR
+vera_df <- targets |>
+  filter(variable %in% c("Chla_ugL_mean","ThermoclineDepth_m_mean") & site_id %in% c("fcre")) %>%
+  filter(!year(datetime) == 2018) %>% # filter out 2018 because no data until August
+  select(-depth_m) 
+
+# plot data - note that y axis is NOT reversed for thermocline depth here
+ggplot(data = vera_df, aes(x = datetime, y = observation)) +
+  geom_line() +
+  facet_wrap(facets = vars(variable), scales = "free_y")+
+  theme_bw()
+```
+
+### Visualize autocorrelation lags in the target variable
+The purpose of this is to inform the choice of tau. **Tau** is the number of timesteps into the past that we are using for prediction. Considerations in choosing tau include:    
+
+1. **Forecasting needs** - over what time horizons are we trying to forecast? For example, if we have 10-minute data, probably a tau of 1 is not very useful because it would just be using data 10 minutes ago to predict data 10 minutes into the future. However, if we have daily data and we want a forecast for tomorrow, using a tau of 60 days might not be very useful because the model would only be using data that occurred two months ago to make a forecast of tomorrow (looking at more recent data would be beneficial).    
+
+2. **Autocorrelation in the data** - if we want to avoid just relying on autocorrelation for our predictive capacity, we might consider choosing a larger value of tau; one way to assess this is to visualize the ACF of the target variable and choose a tau that is approximately the minimum (or where ACF approaches 0 or levels off). Tau shouldn't be so incredibly sensitive that changing it from, e.g., 88 to 90 to 92 days should make a huge difference in model fit.    
+
+```{r}
+chla_ts <- vera_df %>% filter(variable == "Chla_ugL_mean")
+acf(chla_ts$observation, na.action = na.pass, lag.max = 100)
+
+td_ts <- vera_df %>% filter(variable == "ThermoclineDepth_m_mean")
+acf(td_ts$observation, na.action = na.pass, lag.max = 100)
+
+```
+
+Here, we observe that ACF for chl-a starts to level off at ~20 days, so that's potentially a good lag to use. However, we also want to make day-ahead forecasts (so we definitely want to use a 1-day lag to make this easy given the way the GPEDM package functions work). So, instead of just setting tau to 20, we will choose lags of 1 and 20 days. 
+
+Alternatively, we could use the ACF to select tau (20 days) and then select E, an embedding number that would tell the model how many 20-day lags to include. For example, a tau of 20 and an E of 2 would mean that the model would include a 20-day and 40-day lag. Typically, it is good practice to have `E*tau` = the dominant periodicity in the variable. Dominant periodicity is a little tricky to pin down for chl-a but is arguably 1 year. So if we choose a tau of 20, we should choose an E of 18, giving `E*tau` of 360, or about a year. Conversely, if we chose a tau of 60, we would choose an E of 6.
+
+The ACF for thermocline depth has a different pattern, reaching a minimum at 90 days. For thermocline depth, we will use lags of 1, 30 and 90.
+
+### Data wrangling to fit EDM 
+
+Because we are manually choosing lags that are not evenly spaced, we will calculate all lags from 1-360 days and then tell the model which ones to use when fitting. We also add a Time column which we *think* is needed for the function to run properly, as we were getting errors without it.
+
+**IMPORTANT!!** It is very, very important to make sure that you don't accidentally mis-align your lags (i.e., think you are using a 90-day lag for thermocline depth but actually you are using something else!). I think the code below does a pretty good job of making sure this is avoided, but good to be wary. 
+```{r}
+# pivot VERA data wider
+mod_df <- vera_df %>%
+  pivot_wider(names_from = "variable", values_from = "observation")
+
+# generate all lags
+HPlags_chla <- makelags(mod_df,"Chla_ugL_mean",E=360, tau=1, append=T) |>
+  add_column(Time = c(1:nrow(mod_df)))
+HPlags_td <- makelags(mod_df,"ThermoclineDepth_m_mean",E=360, tau=1, append=T) |>
+  add_column(Time = c(1:nrow(mod_df)))
+
+mod_chla <- HPlags_chla %>%
+  select(Time, Chla_ugL_mean, Chla_ugL_mean_1, Chla_ugL_mean_20) 
+
+mod_td <- HPlags_td  %>%
+  select(ThermoclineDepth_m_mean,ThermoclineDepth_m_mean_1, ThermoclineDepth_m_mean_30,ThermoclineDepth_m_mean_90)
+
+final_mod_data <- bind_cols(mod_chla, mod_td)
+```
+
+Here, we split the data into training and forecasting sets. We will use an 80:20 split.
+```{r}
+
+mod_train=final_mod_data[1:1800,]
+mod_test=final_mod_data[1801:2247,]
+```
+
+### Fit EDM model
+
+Here we fit the EDM model with the following arguments:
+1. *data* is the dataframe used for model training
+2. *y* is the column name of the target variable as a character string
+3. *x* are the column names of the lags used in prediction as a vector of character strings
+4. *time* is the name of the timestep column (can this handle datetimes?)
+5. *newdata* is the dataframe of timesteps to be forecasted
+```{r}
+mod <- fitGP(data = mod_train, 
+          y = "Chla_ugL_mean",
+          x = c("Chla_ugL_mean_1","Chla_ugL_mean_20","ThermoclineDepth_m_mean_1","ThermoclineDepth_m_mean_30","ThermoclineDepth_m_mean_90"),
+          time = "Time",
+          newdata = mod_test)
+plot(mod)
+```
+
+
+
+
+
+
