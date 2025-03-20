@@ -82,23 +82,19 @@ mod_df <- vera_df %>%
   pivot_wider(names_from = "variable", values_from = "observation")
 
 # generate all lags
-HPlags_chla <- makelags(mod_df,"Chla_ugL_mean",E=360, tau=1, append=T) |>
+# *you can generate lags for multiple variables at once*
+HPlags <- makelags(mod_df,c("Chla_ugL_mean","ThermoclineDepth_m_mean"),E=360, tau=1, append=T) |>
   add_column(Time = c(1:nrow(mod_df)))
-HPlags_td <- makelags(mod_df,"ThermoclineDepth_m_mean",E=360, tau=1, append=T) |>
-  add_column(Time = c(1:nrow(mod_df)))
 
-mod_chla <- HPlags_chla %>%
-  select(Time, Chla_ugL_mean, Chla_ugL_mean_1, Chla_ugL_mean_20) 
+final_mod_data <- HPlags %>%
+  select(Time, Chla_ugL_mean, Chla_ugL_mean_1, Chla_ugL_mean_20,
+         ThermoclineDepth_m_mean,ThermoclineDepth_m_mean_1,
+         ThermoclineDepth_m_mean_30,ThermoclineDepth_m_mean_90) 
 
-mod_td <- HPlags_td  %>%
-  select(ThermoclineDepth_m_mean,ThermoclineDepth_m_mean_1, ThermoclineDepth_m_mean_30,ThermoclineDepth_m_mean_90)
-
-final_mod_data <- bind_cols(mod_chla, mod_td)
 ```
 
 Here, we split the data into training and forecasting sets. We will use an 80:20 split.
 ```{r}
-
 mod_train=final_mod_data[1:1800,]
 mod_test=final_mod_data[1801:2247,]
 ```
@@ -118,8 +114,30 @@ mod <- fitGP(data = mod_train,
           time = "Time",
           newdata = mod_test)
 plot(mod)
+summary(mod)
 ```
 
+*You have a ton of data, so I wouldn't limit yourself to just 5 predictors. You'll have to do some exploring to find the best model.*
+
+```{r}
+mod_train=HPlags[1:1800,]
+mod_test=HPlags[1801:2247,]
+
+mod2 <- fitGP(data = mod_train, 
+          y = "Chla_ugL_mean",
+          x = c("Chla_ugL_mean_1",
+                "Chla_ugL_mean_10",
+                "Chla_ugL_mean_20",
+                "Chla_ugL_mean_30",
+                "Chla_ugL_mean_40",
+                "ThermoclineDepth_m_mean_1",
+                "ThermoclineDepth_m_mean_30",
+                "ThermoclineDepth_m_mean_90"),
+          time = "Time",
+          newdata = mod_test)
+plot(mod2)
+summary(mod2)
+```
 
 
 
