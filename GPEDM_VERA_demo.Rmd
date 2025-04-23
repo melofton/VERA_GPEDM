@@ -45,9 +45,21 @@ ggplot(data = temp, aes(x = datetime, y = observation)) +
 ```
 
 ### Visualize autocorrelation lags in the target variable
-The purpose of this is to inform the choice of tau. **Tau** is the number of timesteps into the past that we are using for prediction. Considerations in choosing tau include:    
+The purpose of this is to inform the choice of tau. **Tau** is the *length of the timestep* used in the model. Considerations in choosing tau include:    
 
-1. **Forecasting needs** - over what time horizons are we trying to forecast? For example, if we have 10-minute data, probably a tau of 1 is not very useful because it would just be using data 10 minutes ago to predict data 10 minutes into the future. However, if we have daily data and we want a forecast for tomorrow, using a tau of 60 days might not be very useful because the model would only be using data that occurred two months ago to make a forecast of tomorrow (looking at more recent data would be beneficial).    
+1. **Forecasting needs** - over what time horizons are we trying to forecast? For example, if we have 10-minute data, probably a tau of 1 is not very useful because it would just be using data 10 minutes ago to predict data 10 minutes into the future. However, if we have daily data and we want a forecast for tomorrow, using a tau of 60 days might not be very useful because the model would only be using data that occurred two months ago to make a forecast of tomorrow (looking at more recent data would be beneficial).
+
+*Note: In the default implementation, tau and the forecast horizon are assumed the same, but there is no reason this has to be the case, nor is there is any reason that tau has to be uniform, as you know. If you specify `E` and `tau` in `fitGP`, you get the following model:*
+
+$$y_{t}=f(y_{t-\tau},y_{t-2\tau},...,y_{t-E\tau})$$
+
+*However, you can produce any generic model by specifying the lags accordingly under `x`, and adjusting the inputs by some forecast horizon if you want to decouple it from tau.*
+
+$$y_{t+h}=f(y_{t},y_{t-\tau_1},y_{t-\tau_2}...)$$
+
+*or equivalently*
+
+$$y_{t}=f(y_{t-h},y_{t-\tau_1-h},y_{t-\tau_2-h}...)$$
 
 2. **Autocorrelation in the data** - if we want to avoid just relying on autocorrelation for our predictive capacity, we might consider choosing a larger value of tau; one way to assess this is to visualize the ACF of the target variable and choose a tau that is approximately the minimum (or where ACF approaches 0 or levels off). Tau shouldn't be so incredibly sensitive that changing it from, e.g., 88 to 90 to 92 days should make a huge difference in model fit.    
 
@@ -61,6 +73,21 @@ Alternatively, we could use the ACF to select tau (90 days) and then select E, a
 
 ### Data wrangling to fit EDM and forecast
 First, we will extend the dataframe to include the next 1-35 days to supply that as `newdata` to the `fitGP` function below.
+
+*The `makelags` function has a `forecast` argument, but it will only make a forecast table for tau steps into the future, so your approach here is acceptable. Also, playing around with this, this forecast feature will only work with your data if you put it in `as.data.frame`. Your data object here is not a standard data frame, so it's not playing well with the code because `df[,"Time"]` produces another `tbl_df`, not a vector, so it doesn't index properly. I can probably patch that though.*
+
+```{r, eval=FALSE}
+test1 <- temp |> add_column(Time = c(1:nrow(temp)))
+class(test1)
+#ok
+head(makelags(as.data.frame(test1),"observation",E=3, tau=1, time="datetime",append = T))
+#weird
+makelags(as.data.frame(test1),"observation",E=3, tau=1, forecast = T, time="datetime")
+#ok
+makelags(as.data.frame(test1),"observation",E=3, tau=1, forecast = T, time="Time")
+```
+
+
 ```{r}
 forecast_time_horizon <- 35
 forecast_dates <- seq.Date(from = as.Date(last(temp$datetime))+1, to = as.Date(last(temp$datetime))+forecast_time_horizon, by = "day")
@@ -75,6 +102,9 @@ mod_df <- bind_rows(temp, fc_df)
 ```
 
 Because we are manually choosing lags that are not evenly spaced, we will calculate all lags from 1-360 days and then tell the model which ones to use when fitting. We also add a Time column which we *think* is needed for the function to run properly, as we were getting errors without it.
+
+*If you omit the time column it should work fine, and it does for me below. If you can reproduce the error you were getting, that could be helpful.*
+
 ```{r}
 #generate all lags
 HPlags <- makelags(mod_df,"observation",E=360, tau=1, append=T) |>
@@ -99,6 +129,9 @@ Here we fit the EDM model with the following arguments:
 3. *x* are the column names of the lags used in prediction as a vector of character strings
 4. *time* is the name of the timestep column (can this handle datetimes?)
 5. *newdata* is the dataframe of timesteps to be forecasted
+
+*Using a datetime for time will probably work, except in some cases where timesteps are iterated internally, like using the `forecast=T` feature in `makelags`, which wasn't designed to work with datetimes. I haven't fully tested it though, so a numeric index is probably safer.*
+
 ```{r}
 mod <- fitGP(data = past_data, 
           y = "observation",
@@ -126,8 +159,11 @@ fc_final <- data.frame(project_id = "vera4cast",
 ### Run for-loop to get iterative predictions
 
 `fitGP` can't handle the forecast dataframe without the lags pre-populated, so we will need to generate our predictions iteratively and fill the lags with model predictions as we go.
+
+*The function `predict_iter` does iterated predictions, but the lags have to be evenly spaced for this wrapper to work. What you have below is an acceptable solution.*
+
 ```{r}
-for(t in 1:nrow(HP_test)){
+for(t in 1:nrow(future_data)){
   pred_list <- predict(mod, newdata = future_data[t,])
   pred_df <- pred_list$outsampresults
   
@@ -178,12 +214,21 @@ fc_plot_data <- fc_final |>
 ggplot(data = fc_plot_data)+
   geom_ribbon(aes(x = datetime, ymin = lower, ymax = upper,
                   fill = "water temperature"), alpha = 0.5) +
+  geom_line(data = past_data, aes(x = as.Date(datetime), y = observation), color="black") +
   geom_line(aes(x = datetime, y = mu, col = "water temperature")) +
   theme_bw() +
   scale_color_manual(name = "variable", values = c("water temperature" = "blue")) +
   scale_fill_manual(name = "variable", values = c("water temperature" = "blue")) +
   ylab("°C") +
   xlab("")
+```
+
+*It's worth looking at the summary and conditional responses. The model has mostly reverted to a persistence model,* $y_t=y_{t-1} + \epsilon$
+
+```{r}
+summary(mod)
+
+getconditionals(mod)
 ```
 
 ### Submit forecast to VERA!
